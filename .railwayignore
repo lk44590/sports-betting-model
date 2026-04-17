@@ -1,7 +1,6 @@
 # Files to exclude from Railway deployment
 frontend/node_modules/
 frontend/.git/
-frontend/dist/
 **/__pycache__/
 **/*.pyc
 .git/
