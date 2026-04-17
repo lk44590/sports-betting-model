@@ -248,11 +248,22 @@ async def get_todays_picks(
         
         all_candidates = []
         
-        # Fetch from ESPN for each sport
-        today_str = datetime.now().strftime('%Y%m%d')
-        for sport in sport_list:
-            candidates = fetcher.create_candidates_from_espn(sport, today_str)
-            all_candidates.extend(candidates)
+        # Try to fetch from The Odds API for real live games
+        try:
+            # Get live odds from The Odds API
+            odds_candidates = get_live_odds_for_sports(sport_list)
+            if odds_candidates:
+                all_candidates.extend(odds_candidates)
+                print(f"✅ Loaded {len(odds_candidates)} live odds from The Odds API")
+        except Exception as e:
+            print(f"⚠️ Odds API failed: {e}, falling back to ESPN")
+        
+        # Fallback to ESPN if no candidates from Odds API
+        if not all_candidates:
+            today_str = datetime.now().strftime('%Y%m%d')
+            for sport in sport_list:
+                candidates = fetcher.create_candidates_from_espn(sport, today_str)
+                all_candidates.extend(candidates)
         
         # Evaluate all candidates
         evaluated = []
