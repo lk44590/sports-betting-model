@@ -22,9 +22,13 @@ from core.kelly import BankrollManager
 from data.db import BettingDatabase, Bet, db
 from data.fetcher import DataAggregator, fetcher
 from data.odds_api_integration import odds_manager, get_live_odds_for_sports
+from data.team_stats import team_stats_manager
+from data.espn_fetcher import espn_fetcher
 from ml.neural_ensemble import neural_ensemble
 from ml.nlp_sentiment import sentiment_analyzer
+from ml.predictive_model import predictive_model, GamePrediction
 from tracking.performance import PerformanceTracker
+from tracking.backtester import backtester, BacktestResult
 
 
 # Pydantic models for API
@@ -683,6 +687,263 @@ async def get_odds_api_sports():
             "mapping": SPORT_KEYS,
             "note": "Configure ODDS_API_KEY environment variable to use"
         }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Team Statistics Endpoints
+
+@app.get("/api/stats/teams")
+async def get_team_statistics(
+    sport: str = Query(..., description="Sport (NBA, MLB, NFL, NHL)"),
+    season: Optional[str] = Query(None, description="Season year (default: current)")
+):
+    """Get team statistics for a sport."""
+    try:
+        if season is None:
+            season = str(datetime.now().year)
+        
+        # Try to fetch from ESPN
+        espn_fetcher.update_all_team_stats(sport, season)
+        
+        # Get stats from database
+        teams = team_stats_manager.get_all_teams_stats(sport, season)
+        
+        return {
+            "sport": sport,
+            "season": season,
+            "teams_count": len(teams),
+            "teams": [
+                {
+                    "team_id": t.team_id,
+                    "name": t.team_name,
+                    "record": f"{t.wins}-{t.losses}",
+                    "home_record": f"{t.home_wins}-{t.home_losses}",
+                    "away_record": f"{t.away_wins}-{t.away_losses}",
+                    "points_scored_avg": round(t.points_scored, 1),
+                    "points_allowed_avg": round(t.points_allowed, 1),
+                    "last_10": f"{t.last_10_wins}-{t.last_10_losses}",
+                    "streak": t.current_streak,
+                    "updated": t.updated_at
+                }
+                for t in teams
+            ]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/stats/update")
+async def update_team_stats(
+    sport: str = Query(..., description="Sport to update"),
+    season: Optional[str] = Query(None, description="Season year")
+):
+    """Force update team statistics from ESPN."""
+    try:
+        if season is None:
+            season = str(datetime.now().year)
+        
+        espn_fetcher.update_all_team_stats(sport, season)
+        
+        return {
+            "success": True,
+            "sport": sport,
+            "season": season,
+            "message": f"Updated team stats for {sport}"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Predictive Model Endpoints
+
+@app.get("/api/model/predict")
+async def predict_game(
+    home_team_id: str = Query(..., description="Home team ID"),
+    away_team_id: str = Query(..., description="Away team ID"),
+    sport: str = Query(..., description="Sport"),
+    season: Optional[str] = Query(None, description="Season year")
+):
+    """Get prediction for a specific game."""
+    try:
+        prediction = predictive_model.predict_game(home_team_id, away_team_id, sport, season)
+        
+        if not prediction:
+            raise HTTPException(status_code=404, detail="Could not generate prediction - check team IDs and sport")
+        
+        return {
+            "home_team": prediction.home_team,
+            "away_team": prediction.away_team,
+            "sport": prediction.sport,
+            "predictions": {
+                "moneyline": {
+                    "home_win_prob": prediction.home_win_probability,
+                    "away_win_prob": prediction.away_win_probability
+                },
+                "spread": {
+                    "predicted_spread": prediction.predicted_spread,
+                    "home_cover_prob": prediction.home_spread_prob,
+                    "away_cover_prob": prediction.away_spread_prob
+                },
+                "total": {
+                    "predicted_total": prediction.predicted_total,
+                    "over_prob": prediction.over_prob,
+                    "under_prob": prediction.under_prob
+                }
+            },
+            "confidence": prediction.confidence,
+            "sample_size": prediction.sample_size
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/model/advanced-picks")
+async def get_advanced_picks(
+    sports: Optional[str] = Query(None, description="Comma-separated sports"),
+    min_ev: float = Query(0.05, description="Minimum EV threshold (as decimal, e.g., 0.05 = 5%)"),
+    include_spreads: bool = Query(True, description="Include spread bets"),
+    include_totals: bool = Query(True, description="Include total bets")
+):
+    """
+    Get advanced picks using predictive model + current odds.
+    Compares model predictions to market odds to find value.
+    """
+    try:
+        sport_list = [s.strip() for s in sports.split(',')] if sports else ["NBA", "MLB", "NHL"]
+        
+        # Get current odds
+        from data.odds_api_integration import odds_manager
+        odds_data = odds_manager.get_all_odds(sport_list)
+        
+        # Convert to games format
+        games = []
+        for sport, events in odds_data.items():
+            for event in events:
+                # Extract teams and odds
+                home_team = event.get('home_team', '')
+                away_team = event.get('away_team', '')
+                
+                # Parse bookmakers for best odds
+                bookmakers = event.get('bookmakers', [])
+                if not bookmakers:
+                    continue
+                
+                # Get moneyline odds
+                home_ml = None
+                away_ml = None
+                
+                for book in bookmakers:
+                    for market in book.get('markets', []):
+                        if market.get('key') == 'h2h':
+                            outcomes = market.get('outcomes', [])
+                            for outcome in outcomes:
+                                if outcome.get('name') == home_team:
+                                    home_ml = int(outcome.get('price', 0))
+                                elif outcome.get('name') == away_team:
+                                    away_ml = int(outcome.get('price', 0))
+                
+                if home_ml and away_ml:
+                    games.append({
+                        'sport': sport,
+                        'home_team': home_team,
+                        'away_team': away_team,
+                        'home_team_id': None,  # Would need mapping
+                        'away_team_id': None,
+                        'home_ml_odds': home_ml,
+                        'away_ml_odds': away_ml
+                    })
+        
+        # Find value using predictive model
+        # Note: This requires team ID mapping which we don't have yet
+        # For now, return a placeholder
+        
+        return {
+            "date": datetime.now().strftime('%Y-%m-%d'),
+            "sports": sport_list,
+            "games_analyzed": len(games),
+            "value_bets_found": 0,
+            "message": "Advanced picks require team ID mapping from ESPN. Use /api/stats/teams first.",
+            "sample_games": games[:5] if games else []
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Backtesting Endpoints
+
+@app.post("/api/backtest/run")
+async def run_backtest(
+    start_date: str = Query(..., description="Start date (YYYY-MM-DD)"),
+    end_date: str = Query(..., description="End date (YYYY-MM-DD)"),
+    initial_bankroll: float = Query(1000.0, description="Starting bankroll"),
+    kelly_fraction: float = Query(0.2, description="Kelly fraction (0.2 = 20%)")
+):
+    """
+    Run backtest simulation over historical data.
+    Returns performance metrics and validates model effectiveness.
+    """
+    try:
+        result = backtester.run_backtest(start_date, end_date, initial_bankroll, kelly_fraction)
+        
+        if not result:
+            return {
+                "success": False,
+                "message": "No bets found for the specified date range. Need historical data."
+            }
+        
+        return {
+            "success": True,
+            "period": f"{start_date} to {end_date}",
+            "summary": {
+                "total_bets": result.total_bets,
+                "win_rate": round(result.win_rate * 100, 1),
+                "profit": round(result.profit, 2),
+                "roi": round(result.roi, 2),
+                "max_drawdown": round(result.max_drawdown * 100, 1),
+                "sharpe_ratio": round(result.sharpe_ratio, 2)
+            },
+            "by_bet_type": {
+                "moneyline": result.ml_results,
+                "spread": result.spread_results,
+                "totals": result.total_results
+            },
+            "by_sport": result.sport_results,
+            "assessment": "EXCELLENT" if result.roi > 5 else "GOOD" if result.roi > 2 else "MARGINAL" if result.roi > 0 else "POOR"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/backtest/report")
+async def get_backtest_report():
+    """Get detailed backtest report."""
+    try:
+        # Run backtest for last 6 months
+        end_date = datetime.now().strftime('%Y-%m-%d')
+        start_date = (datetime.now() - timedelta(days=180)).strftime('%Y-%m-%d')
+        
+        result = backtester.run_backtest(start_date, end_date)
+        
+        if result:
+            backtester.print_backtest_report(result)
+            return {
+                "success": True,
+                "report_generated": True,
+                "period": f"{start_date} to {end_date}",
+                "summary": {
+                    "total_bets": result.total_bets,
+                    "win_rate": f"{result.win_rate:.1%}",
+                    "profit": f"${result.profit:,.2f}",
+                    "roi": f"{result.roi:.2f}%",
+                    "max_drawdown": f"{result.max_drawdown:.1%}"
+                }
+            }
+        else:
+            return {
+                "success": False,
+                "message": "No historical data available for backtest"
+            }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
