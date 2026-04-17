@@ -82,7 +82,8 @@ class OddsAPIManager:
     """
     
     def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key or os.getenv('ODDS_API_KEY')
+        raw_key = api_key or os.getenv('ODDS_API_KEY')
+        self.api_key = self._validate_api_key(raw_key)
         self.session = requests.Session()
         self.session.headers.update({
             'Accept': 'application/json'
@@ -99,6 +100,26 @@ class OddsAPIManager:
         
         # Load request count from file
         self._load_request_count()
+    
+    def _validate_api_key(self, key: Optional[str]) -> Optional[str]:
+        """Validate API key format and return cleaned key."""
+        if not key:
+            return None
+        
+        # Clean the key (remove whitespace)
+        cleaned = key.strip()
+        
+        # Check length (should be 32 characters for hex format)
+        if len(cleaned) != 32:
+            print(f"⚠️ Warning: API key length is {len(cleaned)}, expected 32 characters")
+            print(f"   Key preview: {cleaned[:8]}...{cleaned[-4:]}")
+        
+        # Check it's alphanumeric (hex format)
+        if not all(c.isalnum() for c in cleaned):
+            print(f"⚠️ Warning: API key contains non-alphanumeric characters")
+            return None
+        
+        return cleaned
     
     def _load_request_count(self):
         """Load today's request count from file."""
