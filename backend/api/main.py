@@ -136,15 +136,6 @@ betting_model = SportsBettingModel(bankroll=1000.0)
 tracker = PerformanceTracker()
 
 
-@app.get("/")
-async def root():
-    return {
-        "message": "Sports Betting Model API",
-        "version": "1.0.0",
-        "docs": "/docs"
-    }
-
-
 @app.get("/api/model/config")
 async def get_model_config():
     """Get current model configuration and thresholds."""
