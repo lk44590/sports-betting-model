@@ -247,23 +247,31 @@ async def get_todays_picks(
             sport_list = ["NBA", "NHL", "MLB"]
         
         all_candidates = []
+        data_source = "none"
         
         # Try to fetch from The Odds API for real live games
+        print(f"🔍 Checking Odds API key: {odds_manager.get_usage_stats()['api_key_configured']}")
         try:
             # Get live odds from The Odds API
             odds_candidates = get_live_odds_for_sports(sport_list)
             if odds_candidates:
                 all_candidates.extend(odds_candidates)
+                data_source = "odds_api"
                 print(f"✅ Loaded {len(odds_candidates)} live odds from The Odds API")
+            else:
+                print("⚠️ Odds API returned no candidates")
         except Exception as e:
-            print(f"⚠️ Odds API failed: {e}, falling back to ESPN")
+            print(f"❌ Odds API failed: {e}")
         
         # Fallback to ESPN if no candidates from Odds API
         if not all_candidates:
+            print("🔄 Falling back to ESPN...")
             today_str = datetime.now().strftime('%Y%m%d')
             for sport in sport_list:
                 candidates = fetcher.create_candidates_from_espn(sport, today_str)
                 all_candidates.extend(candidates)
+            if all_candidates:
+                data_source = "espn"
         
         # Evaluate all candidates
         evaluated = []
@@ -281,6 +289,7 @@ async def get_todays_picks(
         return {
             "date": datetime.now().strftime('%Y-%m-%d'),
             "sports_checked": sport_list,
+            "data_source": data_source,
             "total_candidates": len(all_candidates),
             "qualified_picks": len(picks),
             "picks": [
@@ -530,12 +539,32 @@ async def get_odds_api_status():
     """Get The Odds API status and usage stats."""
     try:
         stats = odds_manager.get_usage_stats()
+        # Mask API key for security
+        api_key_preview = None
+        if stats['api_key_configured'] and os.getenv('ODDS_API_KEY'):
+            key = os.getenv('ODDS_API_KEY')
+            api_key_preview = f"{key[:4]}...{key[-4:]}"
+        
         return {
             "configured": stats['api_key_configured'],
+            "api_key_preview": api_key_preview,
             "requests_today": stats['requests_today'],
             "request_limit": stats['request_limit'],
             "remaining_today": stats['remaining_today'],
             "cache_ttl_seconds": stats['cache_ttl_seconds']
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/odds/clear-cache")
+async def clear_odds_cache():
+    """Clear the Odds API cache to force fresh data fetching."""
+    try:
+        success = odds_manager.clear_cache()
+        return {
+            "success": success,
+            "message": "Cache cleared" if success else "Failed to clear cache"
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -816,3 +845,22 @@ if __name__ == "__main__":
 else:
     # Production: setup static files when imported
     setup_static_files()
+    
+    # Production startup: Log API key status and clear cache for fresh data
+    print("=" * 60)
+    print("🏆 Sports Betting Model - Production Startup")
+    print("=" * 60)
+    stats = odds_manager.get_usage_stats()
+    print(f"🔑 Odds API Key Configured: {stats['api_key_configured']}")
+    if stats['api_key_configured']:
+        key = os.getenv('ODDS_API_KEY', '')
+        print(f"   Key preview: {key[:4]}...{key[-4:]}")
+    else:
+        print("   ⚠️ WARNING: No API key found! Set ODDS_API_KEY environment variable")
+    print(f"📊 API Requests Today: {stats['requests_today']}/{stats['request_limit']}")
+    
+    # Clear cache on startup to ensure fresh data
+    print("🧹 Clearing cache for fresh data...")
+    odds_manager.clear_cache()
+    print("✅ Startup complete - ready for real-time odds")
+    print("=" * 60)

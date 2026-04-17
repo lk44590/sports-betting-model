@@ -20,7 +20,6 @@ ODDS_API_BASE = "https://api.the-odds-api.com/v4"
 SPORT_KEYS = {
     "NBA": "basketball_nba",
     "NCAAMB": "basketball_ncaab",
-    "NCAAMB": "basketball_mens-college-basketball",
     "MLB": "baseball_mlb",
     "NFL": "americanfootball_nfl",
     "NCAAF": "americanfootball_ncaaf",
@@ -160,22 +159,37 @@ class OddsAPIManager:
         except Exception as e:
             print(f"Cache write error: {e}")
     
+    def clear_cache(self):
+        """Clear all cached data to force fresh fetches."""
+        try:
+            import shutil
+            if self.cache_dir.exists():
+                shutil.rmtree(self.cache_dir)
+                self.cache_dir.mkdir(parents=True, exist_ok=True)
+                print("🧹 Cleared Odds API cache")
+                return True
+        except Exception as e:
+            print(f"Error clearing cache: {e}")
+            return False
+    
     def _make_request(self, endpoint: str, params: Dict = None) -> Optional[Any]:
         """Make API request with caching and rate limiting."""
         if not self.api_key:
-            print("No Odds API key configured")
+            print(f"❌ No Odds API key configured. Set ODDS_API_KEY environment variable.")
             return None
         
         if self.requests_today >= self.request_limit:
-            print(f"Odds API rate limit reached ({self.request_limit}/day)")
+            print(f"⚠️ Odds API rate limit reached ({self.request_limit}/day)")
             return None
         
         # Check cache
         cache_key = self._get_cache_key(endpoint, params or {})
         cached = self._get_cached(cache_key)
         if cached is not None:
-            print(f"Using cached data for {endpoint}")
+            print(f"📦 Using cached data for {endpoint}")
             return cached
+        
+        print(f"🌐 Making Odds API request: {endpoint}")
         
         # Make request
         url = f"{ODDS_API_BASE}/{endpoint}"
