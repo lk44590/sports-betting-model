@@ -147,6 +147,49 @@ async def get_model_config():
     return betting_model.get_model_config()
 
 
+@app.get("/api/status")
+async def get_system_status():
+    """
+    Get complete system health status.
+    Use this to verify deployment is working correctly.
+    """
+    try:
+        odds_stats = odds_manager.get_usage_stats()
+        
+        return {
+            "status": "healthy",
+            "version": "1.0.0",
+            "timestamp": datetime.now().isoformat(),
+            "odds_api": {
+                "configured": odds_stats['api_key_configured'],
+                "requests_today": odds_stats['requests_today'],
+                "request_limit": odds_stats['request_limit'],
+                "remaining": odds_stats['remaining_today']
+            },
+            "model": {
+                "bankroll": betting_model.bankroll_manager.current_bankroll,
+                "kelly_fraction": betting_model.config['kelly_fraction'],
+                "min_ev_pct": betting_model.config['min_ev_pct'],
+                "min_edge_score": betting_model.config['min_edge_score']
+            },
+            "paper_trading": {
+                "enabled": auto_trader.get_settings().enabled if auto_trader.session else False,
+                "current_bankroll": auto_trader.get_current_bankroll() if auto_trader.session else 10000.0
+            },
+            "next_steps": [] if odds_stats['api_key_configured'] else [
+                "Set ODDS_API_KEY in Railway Variables",
+                "Get free key at https://the-odds-api.com/",
+                "Redeploy after adding key"
+            ]
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
+
+
 @app.post("/api/model/evaluate", response_model=BetEvaluationOutput)
 async def evaluate_bet(candidate: BetCandidateInput):
     """
@@ -1365,7 +1408,13 @@ else:
             if key:
                 print(f"   Key preview: {key[:4]}...{key[-4:]}")
         else:
-            print("   ⚠️ WARNING: No API key found! Set ODDS_API_KEY environment variable")
+            print("   ⚠️ WARNING: No API key found!")
+            print("   → Set ODDS_API_KEY in Railway Variables:")
+            print("     1. Go to railway.app → your project")
+            print("     2. Click 'Variables' tab")
+            print("     3. Add: ODDS_API_KEY = your_key_here")
+            print("     4. Get free key: https://the-odds-api.com/")
+            print("   → Without API key, model uses stale/demo data")
         print(f"📊 API Requests Today: {stats['requests_today']}/{stats['request_limit']}")
         print("✅ Startup complete - ready for real-time odds")
         print("=" * 60)
