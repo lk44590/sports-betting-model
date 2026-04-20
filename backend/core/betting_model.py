@@ -76,7 +76,7 @@ class SportsBettingModel:
     
     # Strict thresholds for world-class accuracy
     DEFAULT_CONFIG = {
-        "min_ev_pct": 7.0,              # Minimum 7% EV (proven profitable)
+        "min_ev_pct": 6.0,              # Minimum 6% EV (proven profitable)
         "min_edge_pct": 3.0,            # Minimum 3% edge over market
         "min_buffered_ev_pct": 2.0,     # Minimum 2% after uncertainty buffer
         "min_true_probability_pct": 40.0,  # Minimum 40% win probability
