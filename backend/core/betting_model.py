@@ -11,8 +11,8 @@ import re
 
 from .ev_calculator import (
     american_to_probability, calculate_ev_percentage, calculate_edge,
-    calculate_composite_score, clamp, get_max_odds_for_ev_threshold,
-    probability_to_american
+    calculate_composite_score, calculate_confidence_interval, clamp,
+    get_max_odds_for_ev_threshold, probability_to_american
 )
 from .kelly import KellyCriterion, BankrollManager, simultaneous_kelly_adjustment
 
@@ -332,8 +332,6 @@ class SportsBettingModel:
         Calculate uncertainty buffer using statistical confidence intervals.
         Uses Wilson score interval for proper uncertainty quantification.
         """
-        from .ev_calculator import calculate_confidence_interval
-        
         # Use Wilson score confidence interval
         # Lower bound of CI represents "worst case" probability
         lower_bound, upper_bound = calculate_confidence_interval(
