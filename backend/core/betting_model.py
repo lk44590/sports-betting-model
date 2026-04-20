@@ -146,6 +146,10 @@ class SportsBettingModel:
         )
         candidate.model_probability = capped_prob
         
+        # If model_probability is default (0.5), use market implied as better baseline
+        if candidate.model_probability == 0.5 and candidate.market_implied_prob:
+            candidate.model_probability = candidate.market_implied_prob
+        
         # Calculate fair probability (no-vig) using proper vig removal
         # For now, use market implied with small vig adjustment
         # In two-way markets, fair probability = implied / total_implied
