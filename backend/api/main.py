@@ -29,6 +29,7 @@ from ml.nlp_sentiment import sentiment_analyzer
 from ml.predictive_model import predictive_model, GamePrediction
 from tracking.performance import PerformanceTracker
 from tracking.backtester import backtester, BacktestResult
+from paper_trading.auto_trader import auto_trader, PaperTradingSettings
 
 
 # Pydantic models for API
@@ -295,6 +296,27 @@ async def get_todays_picks(
         
         # Rank and filter
         picks = betting_model.filter_and_rank_picks(evaluated, max_picks=max_picks)
+        
+        # Auto-create paper bets for tracking
+        paper_bets_created = 0
+        try:
+            for pick in picks:
+                pick_dict = {
+                    'bet_id': pick.bet_id,
+                    'sport': pick.sport,
+                    'event': pick.event,
+                    'selection': pick.selection,
+                    'bet_type': pick.bet_type,
+                    'odds': pick.odds,
+                    'true_probability': pick.true_probability * 100,
+                    'ev_pct': pick.ev_pct
+                }
+                if auto_trader.create_paper_bet(pick_dict):
+                    paper_bets_created += 1
+            if paper_bets_created > 0:
+                print(f"📝 Auto-created {paper_bets_created} paper bets for tracking")
+        except Exception as e:
+            print(f"⚠️ Could not create paper bets: {e}")
         
         # Get game times from candidates
         game_times = {}
@@ -1039,6 +1061,215 @@ def _interpret_impact(impact: float) -> str:
         return "Moderate negative signal"
     else:
         return "Neutral/unclear signal"
+
+
+# Paper Trading Endpoints
+
+@app.post("/api/paper-trading/enable")
+async def enable_paper_trading(
+    starting_bankroll: float = Query(10000.0, description="Starting virtual bankroll"),
+    kelly_fraction: float = Query(0.2, description="Kelly fraction (0.2 = 20%)")
+):
+    """Enable automatic paper trading with virtual money."""
+    try:
+        auto_trader.update_settings(
+            enabled=True,
+            starting_bankroll=starting_bankroll,
+            current_bankroll=starting_bankroll,
+            kelly_fraction=kelly_fraction
+        )
+        
+        return {
+            "success": True,
+            "message": "Paper trading enabled",
+            "starting_bankroll": starting_bankroll,
+            "kelly_fraction": kelly_fraction,
+            "status": "When you generate picks, virtual bets will be created automatically"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/paper-trading/disable")
+async def disable_paper_trading():
+    """Disable automatic paper trading."""
+    try:
+        auto_trader.update_settings(enabled=False)
+        
+        return {
+            "success": True,
+            "message": "Paper trading disabled",
+            "status": "Automatic bet creation is now off"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/paper-trading/status")
+async def get_paper_trading_status():
+    """Get paper trading status and current performance."""
+    try:
+        settings = auto_trader.get_settings()
+        performance = auto_trader.get_performance_summary()
+        
+        return {
+            "enabled": settings.enabled,
+            "settings": {
+                "starting_bankroll": settings.starting_bankroll,
+                "kelly_fraction": settings.kelly_fraction,
+                "min_ev": settings.min_ev,
+                "max_daily_bets": settings.max_daily_bets
+            },
+            "performance": performance,
+            "note": "Paper trading tracks virtual bets automatically when you generate picks"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/paper-trading/bets")
+async def get_paper_bets(
+    limit: int = Query(50, description="Number of bets to return"),
+    status: Optional[str] = Query(None, description="Filter by status: pending, win, loss, push")
+):
+    """Get all paper bets history."""
+    try:
+        from paper_trading.models import PaperBet
+        
+        if status:
+            bets = auto_trader.session.query(PaperBet).filter_by(result=status).limit(limit).all()
+        else:
+            bets = auto_trader.get_all_bets(limit)
+        
+        return {
+            "total_bets": len(bets),
+            "bets": [
+                {
+                    "id": bet.id,
+                    "bet_id": bet.bet_id,
+                    "date": bet.date,
+                    "sport": bet.sport,
+                    "event": bet.event,
+                    "selection": bet.selection,
+                    "bet_type": bet.bet_type,
+                    "odds": bet.odds,
+                    "stake": bet.stake,
+                    "model_probability": bet.model_probability,
+                    "ev_pct": bet.ev_pct,
+                    "result": bet.result,
+                    "profit": bet.profit,
+                    "created_at": bet.created_at.isoformat() if bet.created_at else None,
+                    "settled_at": bet.settled_at.isoformat() if bet.settled_at else None
+                }
+                for bet in bets
+            ]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/paper-trading/performance")
+async def get_paper_trading_performance(
+    days: int = Query(30, description="Days of history to include")
+):
+    """Get detailed paper trading performance metrics."""
+    try:
+        summary = auto_trader.get_performance_summary()
+        daily = auto_trader.get_daily_performance(days)
+        
+        return {
+            "summary": summary,
+            "daily_performance": daily,
+            "assessment": _assess_performance(summary['roi'], summary['win_rate'])
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _assess_performance(roi: float, win_rate: float) -> str:
+    """Assess paper trading performance."""
+    if roi > 5:
+        return "EXCELLENT: World-class performance (>5% ROI)"
+    elif roi > 2:
+        return "GOOD: Profitable long-term (>2% ROI)"
+    elif roi > 0:
+        return "MARGINAL: Positive but high variance (0-2% ROI)"
+    elif roi == 0:
+        return "BREAK-EVEN: No profit or loss"
+    else:
+        return "POOR: Losing money - model needs improvement"
+
+
+@app.post("/api/paper-trading/reset")
+async def reset_paper_trading(
+    new_bankroll: float = Query(10000.0, description="New starting bankroll")
+):
+    """Reset paper trading - clears all bets and resets bankroll."""
+    try:
+        success = auto_trader.reset_paper_trading(new_bankroll)
+        
+        if success:
+            return {
+                "success": True,
+                "message": f"Paper trading reset with ${new_bankroll:,.2f} virtual bankroll",
+                "new_bankroll": new_bankroll,
+                "warning": "All previous bet history has been cleared"
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Failed to reset paper trading")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/paper-trading/settle")
+async def settle_paper_bet(
+    bet_id: str = Query(..., description="Bet ID to settle"),
+    result: str = Query(..., description="Result: win, loss, or push")
+):
+    """Manually settle a paper bet (for testing or when auto-settlement fails)."""
+    try:
+        if result not in ['win', 'loss', 'push']:
+            raise HTTPException(status_code=400, detail="Result must be win, loss, or push")
+        
+        success = auto_trader.settle_bet(bet_id, result)
+        
+        if success:
+            return {
+                "success": True,
+                "message": f"Bet {bet_id} settled as {result}",
+                "bet_id": bet_id,
+                "result": result
+            }
+        else:
+            raise HTTPException(status_code=400, detail=f"Could not settle bet {bet_id}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/paper-trading/pending")
+async def get_pending_paper_bets():
+    """Get all pending paper bets that haven't been settled yet."""
+    try:
+        bets = auto_trader.get_pending_bets()
+        
+        return {
+            "pending_count": len(bets),
+            "bets": [
+                {
+                    "bet_id": bet.bet_id,
+                    "date": bet.date,
+                    "sport": bet.sport,
+                    "event": bet.event,
+                    "selection": bet.selection,
+                    "odds": bet.odds,
+                    "stake": bet.stake,
+                    "created_at": bet.created_at.isoformat() if bet.created_at else None
+                }
+                for bet in bets
+            ]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/nlp/team-summary")
