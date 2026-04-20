@@ -422,6 +422,48 @@ async def get_todays_picks(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/test-evaluation")
+async def test_evaluation():
+    """Test a single candidate evaluation directly."""
+    try:
+        # Create a simple test candidate
+        test_candidate = BetCandidate(
+            bet_id="test-1",
+            sport="NBA",
+            event="Test Game",
+            selection="Test Team",
+            bet_type="moneyline",
+            odds=+150,
+            model_probability=0.45,
+            data_quality=85.0,
+            sample_size=30
+        )
+        
+        # Evaluate it
+        evaluated = betting_model.evaluate_candidate(test_candidate)
+        
+        return {
+            "input": {
+                "odds": test_candidate.odds,
+                "model_probability": test_candidate.model_probability,
+                "data_quality": test_candidate.data_quality,
+                "sample_size": test_candidate.sample_size
+            },
+            "output": {
+                "market_implied_prob": round(evaluated.market_implied_prob * 100, 2) if evaluated.market_implied_prob else None,
+                "model_probability": round(evaluated.model_probability * 100, 2) if evaluated.model_probability else None,
+                "true_probability": round(evaluated.true_probability * 100, 2) if evaluated.true_probability else None,
+                "ev_pct": round(evaluated.ev_pct, 2),
+                "edge_score": round(evaluated.edge_score, 1),
+                "qualified": evaluated.qualified,
+                "notes": evaluated.notes
+            }
+        }
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+
 @app.get("/api/picks/debug")
 async def get_picks_debug(
     sports: Optional[str] = Query(None, description="Comma-separated sport list"),
