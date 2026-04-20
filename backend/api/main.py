@@ -341,13 +341,26 @@ async def get_todays_picks(
         
         # Evaluate all candidates
         evaluated = []
+        rejected_low_ev = 0
+        rejected_not_qualified = 0
         for candidate_data in all_candidates:
             bet_candidate = create_candidate_from_dict(candidate_data)
             evaluated_candidate = betting_model.evaluate_candidate(bet_candidate)
             
+            # Debug: print first few candidates
+            if len(evaluated) < 3:
+                print(f"  {evaluated_candidate.sport}: {evaluated_candidate.selection} @ {evaluated_candidate.odds} - EV: {evaluated_candidate.ev_pct:.2f}%, Qualified: {evaluated_candidate.qualified}")
+            
             # Apply additional EV filter
             if evaluated_candidate.ev_pct >= min_ev:
-                evaluated.append(evaluated_candidate)
+                if evaluated_candidate.qualified:
+                    evaluated.append(evaluated_candidate)
+                else:
+                    rejected_not_qualified += 1
+            else:
+                rejected_low_ev += 1
+        
+        print(f"  Filtered: {rejected_low_ev} low EV, {rejected_not_qualified} not qualified, {len(evaluated)} passed")
         
         # Rank and filter
         picks = betting_model.filter_and_rank_picks(evaluated, max_picks=max_picks)
