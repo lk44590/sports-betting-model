@@ -292,7 +292,7 @@ async def evaluate_batch(candidates: List[BetCandidateInput]):
 @app.get("/api/picks/today")
 async def get_todays_picks(
     sports: Optional[str] = Query(None, description="Comma-separated sport list (NBA,MLB,NFL)"),
-    min_ev: float = Query(7.0, description="Minimum EV percentage"),
+    min_ev: float = Query(6.0, description="Minimum EV percentage"),
     max_picks: int = Query(10, description="Maximum picks to return")
 ):
     """
