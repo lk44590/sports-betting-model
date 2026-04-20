@@ -422,6 +422,53 @@ async def get_todays_picks(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/picks/debug")
+async def get_picks_debug(
+    sports: Optional[str] = Query(None, description="Comma-separated sport list"),
+    min_ev: float = Query(6.0, description="Minimum EV percentage"),
+    max_candidates: int = Query(10, description="Max candidates to show")
+):
+    """Debug endpoint to see why candidates are being filtered."""
+    try:
+        if sports:
+            sport_list = [s.strip() for s in sports.split(',')]
+        else:
+            sport_list = ["NBA", "NHL", "MLB"]
+        
+        # Get candidates
+        odds_candidates = get_live_odds_for_sports(sport_list)
+        
+        debug_info = []
+        for i, candidate_data in enumerate(odds_candidates[:max_candidates]):
+            bet_candidate = create_candidate_from_dict(candidate_data)
+            evaluated = betting_model.evaluate_candidate(bet_candidate)
+            
+            debug_info.append({
+                "sport": evaluated.sport,
+                "event": evaluated.event,
+                "selection": evaluated.selection,
+                "odds": evaluated.odds,
+                "model_probability": round(evaluated.model_probability * 100, 1) if evaluated.model_probability else None,
+                "market_implied_prob": round(evaluated.market_implied_prob * 100, 1) if evaluated.market_implied_prob else None,
+                "true_probability": round(evaluated.true_probability * 100, 1) if evaluated.true_probability else None,
+                "ev_pct": round(evaluated.ev_pct, 2),
+                "edge_score": round(evaluated.edge_score, 1),
+                "composite_score": round(evaluated.composite_score, 1),
+                "qualified": evaluated.qualified,
+                "would_pass_filter": evaluated.ev_pct >= min_ev and evaluated.qualified
+            })
+        
+        return {
+            "total_candidates": len(odds_candidates),
+            "showing": len(debug_info),
+            "min_ev_threshold": min_ev,
+            "candidates": debug_info
+        }
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+
 @app.post("/api/bets/place")
 async def place_bet(bet: PlaceBetInput):
     """
