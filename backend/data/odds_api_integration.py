@@ -311,6 +311,13 @@ class OddsAPIManager:
         
         return results
     
+    def get_all_markets(self, sport: str, regions: str = "us") -> Optional[List[Dict]]:
+        """
+        Get all market types (h2h, spreads, totals) for a sport.
+        Returns games with all market data.
+        """
+        return self.get_odds(sport, regions, markets="h2h,spreads,totals")
+    
     def parse_event_odds(self, event_data: Dict) -> Dict[str, Any]:
         """
         Parse raw event data into structured format.
@@ -389,11 +396,15 @@ class OddsAPIManager:
             'book_count': len(bookmakers)
         }
     
-    def convert_to_candidates(self, odds_data: Dict[str, List[Dict]]) -> List[Dict]:
+    def convert_to_candidates(self, odds_data: Dict[str, List[Dict]], filter_date: Optional[str] = None) -> List[Dict]:
         """
         Convert Odds API data to our candidate format.
+        Filter by date to only show upcoming games.
         """
+        from datetime import datetime, timezone
+        
         candidates = []
+        today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
         
         for sport, events in odds_data.items():
             for event in events:
@@ -401,6 +412,18 @@ class OddsAPIManager:
                 
                 if not parsed['consensus']['home'] or not parsed['consensus']['away']:
                     continue
+                
+                # Check if game is today or in the future
+                commence_time = parsed.get('commence_time', '')
+                if commence_time:
+                    try:
+                        # Parse ISO format date
+                        game_date = commence_time[:10]  # Get YYYY-MM-DD
+                        if game_date < today:
+                            # Skip completed games
+                            continue
+                    except:
+                        pass  # If can't parse, include it anyway
                 
                 # Create candidate for home team
                 candidates.append({

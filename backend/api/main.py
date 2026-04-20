@@ -267,15 +267,21 @@ async def get_todays_picks(
         except Exception as e:
             print(f"❌ Odds API failed: {e}")
         
-        # Fallback to ESPN if no candidates from Odds API
+        # Check if no games found
         if not all_candidates:
-            print("🔄 Falling back to ESPN...")
-            today_str = datetime.now().strftime('%Y%m%d')
-            for sport in sport_list:
-                candidates = fetcher.create_candidates_from_espn(sport, today_str)
-                all_candidates.extend(candidates)
-            if all_candidates:
-                data_source = "espn"
+            print("� No upcoming games found for today")
+            data_source = "none"
+            
+            # Return empty response with clear message
+            return {
+                "date": datetime.now().strftime('%Y-%m-%d'),
+                "sports_checked": sport_list,
+                "data_source": data_source,
+                "total_candidates": 0,
+                "qualified_picks": 0,
+                "message": "No upcoming games found for today. Check back later when games are scheduled.",
+                "picks": []
+            }
         
         # Evaluate all candidates
         evaluated = []
@@ -290,6 +296,11 @@ async def get_todays_picks(
         # Rank and filter
         picks = betting_model.filter_and_rank_picks(evaluated, max_picks=max_picks)
         
+        # Get game times from candidates
+        game_times = {}
+        for c in all_candidates:
+            game_times[c.get('bet_id', '')] = c.get('commence_time', '')
+        
         return {
             "date": datetime.now().strftime('%Y-%m-%d'),
             "sports_checked": sport_list,
@@ -301,6 +312,7 @@ async def get_todays_picks(
                     "bet_id": p.bet_id,
                     "sport": p.sport,
                     "event": p.event,
+                    "game_time": game_times.get(p.bet_id, ''),
                     "bet_type": p.bet_type,
                     "selection": p.selection,
                     "odds": p.odds,
