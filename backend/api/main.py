@@ -1117,23 +1117,27 @@ if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
 else:
     # Production: setup static files when imported
-    setup_static_files()
+    try:
+        setup_static_files()
+    except Exception as e:
+        print(f"Warning: Could not setup static files: {e}")
     
-    # Production startup: Log API key status and clear cache for fresh data
-    print("=" * 60)
-    print("🏆 Sports Betting Model - Production Startup")
-    print("=" * 60)
-    stats = odds_manager.get_usage_stats()
-    print(f"🔑 Odds API Key Configured: {stats['api_key_configured']}")
-    if stats['api_key_configured']:
-        key = os.getenv('ODDS_API_KEY', '')
-        print(f"   Key preview: {key[:4]}...{key[-4:]}")
-    else:
-        print("   ⚠️ WARNING: No API key found! Set ODDS_API_KEY environment variable")
-    print(f"📊 API Requests Today: {stats['requests_today']}/{stats['request_limit']}")
-    
-    # Clear cache on startup to ensure fresh data
-    print("🧹 Clearing cache for fresh data...")
-    odds_manager.clear_cache()
-    print("✅ Startup complete - ready for real-time odds")
-    print("=" * 60)
+    # Production startup: Log API key status (don't crash if fails)
+    try:
+        print("=" * 60)
+        print("🏆 Sports Betting Model - Production Startup")
+        print("=" * 60)
+        stats = odds_manager.get_usage_stats()
+        print(f"🔑 Odds API Key Configured: {stats['api_key_configured']}")
+        if stats['api_key_configured']:
+            key = os.getenv('ODDS_API_KEY', '')
+            if key:
+                print(f"   Key preview: {key[:4]}...{key[-4:]}")
+        else:
+            print("   ⚠️ WARNING: No API key found! Set ODDS_API_KEY environment variable")
+        print(f"📊 API Requests Today: {stats['requests_today']}/{stats['request_limit']}")
+        print("✅ Startup complete - ready for real-time odds")
+        print("=" * 60)
+    except Exception as e:
+        print(f"Warning: Startup logging failed: {e}")
+        print("✅ App started (with warnings)")
