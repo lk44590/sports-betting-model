@@ -9,7 +9,7 @@ import os
 from dotenv import load_dotenv
 env_path = Path(__file__).parent.parent.parent / ".env"
 if env_path.exists():
-    load_dotenv(env_path)
+    load_dotenv(env_path, override=True)  # Override Railway's env vars with .env file
 
 from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,7 +27,13 @@ from core.betting_model import SportsBettingModel, BetCandidate, create_candidat
 from core.kelly import BankrollManager
 from data.db import BettingDatabase, Bet, db
 from data.fetcher import DataAggregator, fetcher
-from data.odds_api_integration import odds_manager, get_live_odds_for_sports
+from data.odds_api_integration import odds_manager, get_live_odds_for_sports, OddsAPIManager
+
+# Reinitialize odds_manager with correct API key from .env
+api_key = os.getenv('ODDS_API_KEY')
+if api_key:
+    odds_manager = OddsAPIManager(api_key)
+    print(f"✅ Reinitialized OddsAPIManager with API key: {api_key[:4]}...{api_key[-4:]}")
 from data.team_stats import team_stats_manager
 from data.espn_fetcher import espn_fetcher
 from ml.neural_ensemble import neural_ensemble
