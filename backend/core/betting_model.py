@@ -138,13 +138,21 @@ class SportsBettingModel:
         candidate.market_implied_prob = american_to_probability(candidate.odds)
         
         # Apply sport-specific probability caps
-        capped_prob = self._apply_probability_caps(
-            candidate.model_probability,
-            candidate.sport,
-            candidate.market_type,
-            candidate.sample_size
-        )
-        candidate.model_probability = capped_prob
+        print(f"  Checking caps: quality={candidate.data_quality} (threshold {self.config['min_quality']}), sample={candidate.sample_size} (threshold {self.config['min_sample_size']})")
+        if candidate.data_quality < self.config['min_quality'] or candidate.sample_size < self.config['min_sample_size']:
+            # Cap model probability to market ± 5% when data is poor
+            capped_prob = self._apply_probability_caps(
+                candidate.model_probability,
+                candidate.sport,
+                candidate.market_type,
+                candidate.sample_size
+            )
+            print(f"  Capping triggered: {candidate.model_probability:.3f} -> {capped_prob:.3f}")
+            if capped_prob != candidate.model_probability:
+                candidate.model_probability = capped_prob
+                candidate.notes = "Insufficient data quality. Model probability capped by market."
+        else:
+            print(f"  No capping needed - quality and sample above thresholds")
         
         # If model_probability is default (0.5), use market implied as better baseline
         if candidate.model_probability == 0.5 and candidate.market_implied_prob:
