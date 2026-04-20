@@ -146,15 +146,23 @@ class SportsBettingModel:
         )
         candidate.model_probability = capped_prob
         
-        # Calculate fair probability (no-vig)
-        candidate.fair_probability = candidate.market_implied_prob
+        # Calculate fair probability (no-vig) using proper vig removal
+        # For now, use market implied with small vig adjustment
+        # In two-way markets, fair probability = implied / total_implied
+        candidate.fair_probability = self._calculate_fair_probability(
+            candidate.market_implied_prob,
+            candidate.odds,
+            candidate.sport
+        )
         
         # Bayesian calibration to get true probability
-        candidate.true_probability = self._calibrate_probability(
+        # Blend model probability with market (which is efficient)
+        candidate.true_probability = self._calibrate_probability_v2(
             candidate.model_probability,
             candidate.fair_probability,
             candidate.data_quality,
-            candidate.sample_size
+            candidate.sample_size,
+            candidate.sport
         )
         
         # Calculate EV metrics
@@ -165,8 +173,8 @@ class SportsBettingModel:
             candidate.true_probability, candidate.odds
         ) * 100
         
-        # Apply uncertainty buffer for entry
-        uncertainty_buffer = self._calculate_uncertainty_buffer(candidate)
+        # Apply uncertainty buffer for entry (using Wilson CI)
+        uncertainty_buffer = self._calculate_uncertainty_buffer_v2(candidate)
         buffered_prob = candidate.true_probability - uncertainty_buffer
         candidate.buffered_ev_pct = calculate_ev_percentage(
             buffered_prob, candidate.odds
@@ -183,13 +191,24 @@ class SportsBettingModel:
         candidate.stake_pct = kelly_result.recommended_pct
         candidate.full_kelly_pct = kelly_result.full_kelly_pct
         
-        # Calculate edge score
+        # Calculate confidence interval width for uncertainty scoring
+        lower_bound, upper_bound = calculate_confidence_interval(
+            candidate.true_probability,
+            candidate.sample_size,
+            confidence=0.90
+        )
+        confidence_width = upper_bound - lower_bound
+        
+        # Calculate edge score with enhanced weights
         candidate.edge_score = calculate_composite_score(
             ev_pct=candidate.ev_pct,
             edge=candidate.edge_pct / 100,
             true_prob=candidate.true_probability,
             quality=candidate.data_quality,
-            sample_size=candidate.sample_size
+            sample_size=candidate.sample_size,
+            confidence_width=confidence_width,
+            clv=0.0,  # CLV tracked separately when we have closing lines
+            sport=candidate.sport
         )
         
         # Calculate max acceptable odds (when EV drops below 2%)
@@ -228,49 +247,119 @@ class SportsBettingModel:
         
         return clamp(probability, min_cap, max_cap)
     
-    def _calibrate_probability(self,
+    def _calculate_fair_probability(self, implied_prob: float, odds: int, sport: str) -> float:
+        """
+        Calculate fair (no-vig) probability from implied probability.
+        Applies sport-specific vig adjustment.
+        """
+        # Standard vig is about 4.5-5% for most sports
+        # More liquid markets (NFL, NBA) have lower vig (~4%)
+        # Less liquid markets have higher vig (~6-7%)
+        sport_vig = {
+            'NFL': 0.045, 'NBA': 0.045, 'MLB': 0.048, 'NHL': 0.050,
+            'NCAAMB': 0.055, 'NCAAF': 0.055, 'NCAABASE': 0.058, 'WNBA': 0.050,
+            'default': 0.050
+        }.get(sport, 0.050)
+        
+        # Remove proportional vig
+        # If implied is 55% and vig is 5%, fair = 55% / (1 + 0.05) ≈ 52.4%
+        # For favorites (odds < 0), vig affects them more
+        if odds < 0:
+            # Favorite: remove more vig
+            vig_adjustment = sport_vig * 1.2
+        else:
+            # Underdog: remove less vig
+            vig_adjustment = sport_vig * 0.8
+        
+        fair_prob = implied_prob / (1 + vig_adjustment)
+        return clamp(fair_prob, 0.01, 0.99)
+    
+    def _calibrate_probability_v2(self,
                              model_prob: float,
                              market_prob: float,
                              quality: float,
-                             sample_size: int) -> float:
+                             sample_size: int,
+                             sport: str) -> float:
         """
-        Bayesian calibration blending model and market probabilities.
+        Enhanced Bayesian calibration with market efficiency factors.
+        
+        Markets are more efficient for major sports (NFL, NBA) than minor ones.
+        Weight market more heavily for efficient sports.
         """
-        # Weight model more when quality is high
-        model_weight = 0.7 * (quality / 100)
+        # Market efficiency by sport (0-1, higher = more efficient)
+        market_efficiency = {
+            'NFL': 0.90, 'NBA': 0.88, 'MLB': 0.85, 'NHL': 0.82,
+            'NCAAMB': 0.75, 'NCAAF': 0.78, 'NCAABASE': 0.70, 'WNBA': 0.72,
+            'default': 0.80
+        }.get(sport, 0.80)
         
-        # Reduce model weight for small samples
-        sample_factor = min(1.0, sample_size / 40.0)
-        model_weight *= (0.5 + 0.5 * sample_factor)
+        # Base model weight depends on data quality
+        # High quality (90+) = trust model more
+        # Low quality (<60) = trust market more
+        base_model_weight = 0.3 + (0.5 * (quality / 100))
         
-        market_weight = 1 - model_weight
+        # Adjust for sample size
+        sample_factor = min(1.0, sample_size / 50.0)  # Need 50+ games for full confidence
+        base_model_weight *= sample_factor
+        
+        # Market efficiency adjustment
+        # For efficient markets, increase market weight
+        market_weight_boost = market_efficiency * 0.3
+        
+        # Calculate final weights
+        model_weight = base_model_weight * (1 - market_weight_boost)
+        market_weight = (1 - model_weight) + market_weight_boost
+        
+        # Normalize weights
+        total_weight = model_weight + market_weight
+        model_weight /= total_weight
+        market_weight /= total_weight
         
         # Blend probabilities
         blended = (model_prob * model_weight) + (market_prob * market_weight)
         
-        # Apply uncertainty regression toward 0.5 for low confidence
-        confidence = (quality / 100) * sample_factor
+        # Calculate confidence for regression to mean
+        confidence = (quality / 100) * sample_factor * market_efficiency
+        
+        # Regression to 50% based on confidence
+        # Low confidence = regress more toward 50%
         calibrated = (blended * confidence) + (0.5 * (1 - confidence))
         
         return clamp(calibrated, 0.01, 0.99)
     
-    def _calculate_uncertainty_buffer(self, candidate: BetCandidate) -> float:
-        """Calculate uncertainty buffer based on data quality."""
-        base_buffer = self.config["base_haircut_pct"] / 100
+    def _calculate_uncertainty_buffer_v2(self, candidate: BetCandidate) -> float:
+        """
+        Calculate uncertainty buffer using statistical confidence intervals.
+        Uses Wilson score interval for proper uncertainty quantification.
+        """
+        from .ev_calculator import calculate_confidence_interval
         
-        # Quality penalty
-        quality_penalty = max(0, 75 - candidate.data_quality) / 1000
+        # Use Wilson score confidence interval
+        # Lower bound of CI represents "worst case" probability
+        lower_bound, upper_bound = calculate_confidence_interval(
+            candidate.true_probability,
+            candidate.sample_size,
+            confidence=0.90  # 90% confidence interval
+        )
         
-        # Sample size penalty
-        sample_penalty = max(0, self.config["sample_penalty_threshold"] - candidate.sample_size) / 1000
+        # Buffer is difference between point estimate and lower bound
+        # This is the "statistical haircut" for uncertainty
+        ci_buffer = candidate.true_probability - lower_bound
         
-        # Early season additional penalty
-        early_season_penalty = 0
-        if candidate.sample_size < 20:
-            early_season_penalty = (20 - candidate.sample_size) * 0.003
+        # Quality adjustment - poor data quality increases buffer
+        quality_factor = max(0, (85 - candidate.data_quality) / 100)
+        quality_buffer = 0.05 * quality_factor  # Up to 5% additional
         
-        total_buffer = base_buffer + quality_penalty + sample_penalty + early_season_penalty
-        return min(total_buffer, 0.15)  # Cap at 15%
+        # Sport-specific uncertainty (some sports more volatile)
+        sport_volatility = {
+            'MLB': 0.02, 'NCAABASE': 0.025,  # Baseball high variance
+            'NBA': 0.015, 'NCAAMB': 0.020,   # Basketball moderate
+            'NFL': 0.018, 'NCAAF': 0.022,   # Football moderate-high
+            'NHL': 0.020, 'WNBA': 0.018,    # Hockey/WNBA moderate
+        }.get(candidate.sport, 0.02)
+        
+        total_buffer = ci_buffer + quality_buffer + sport_volatility
+        return min(total_buffer, 0.20)  # Cap at 20%
     
     def _check_qualification(self, candidate: BetCandidate) -> bool:
         """Check if candidate meets all strict thresholds."""

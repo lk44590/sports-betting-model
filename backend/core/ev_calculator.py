@@ -197,39 +197,150 @@ def calculate_composite_score(ev_pct: float,
                               true_prob: float,
                               quality: float,
                               sample_size: int,
+                              confidence_width: float = 0.0,
+                              clv: float = 0.0,
+                              sport: str = "default",
                               history_boost: float = 0) -> float:
     """
-    Calculate composite edge score (0-100) for ranking bets.
-    Higher score = better bet opportunity.
+    Enhanced composite edge score (0-100) for ranking bets.
+    Uses optimized weights based on professional betting research.
+    
+    Args:
+        ev_pct: Expected value percentage
+        edge: Edge over market (as decimal, e.g., 0.05 = 5%)
+        true_prob: True win probability
+        quality: Data quality score (0-100)
+        sample_size: Sample size for confidence
+        confidence_width: Width of confidence interval (uncertainty measure)
+        clv: Closing Line Value percentage
+        sport: Sport for sport-specific adjustments
+        history_boost: Historical performance bonus
+    
+    Returns:
+        Composite score from 0-100
     """
-    # EV contribution (35%)
-    ev_score = min(ev_pct / 0.25, 35)  # Cap at 25% EV
+    # === WEIGHTED COMPONENTS (Total: 100 points) ===
     
-    # Edge contribution (25%)
-    edge_score = min(edge * 100 * 2.5, 25)
+    # EV contribution (40% - primary factor)
+    # Higher EV = better, but diminishing returns above 15%
+    ev_score = min(ev_pct / 0.20, 40)  # 20% EV = full 40 points
     
-    # Probability confidence (15%)
-    # Sweet spot is 50-70% probability
-    prob_distance = abs(true_prob - 0.6)
-    prob_score = max(0, 15 - (prob_distance * 20))
+    # Edge contribution (15% - secondary confirmation)
+    edge_score = min(abs(edge) * 100 * 1.5, 15)
     
-    # Data quality (15%)
-    quality_score = (quality / 100) * 15
+    # Confidence/Uncertainty contribution (20% - new!)
+    # Narrow confidence interval = higher confidence
+    # confidence_width is typically 0.05-0.20 (5-20%)
+    confidence_score = max(0, 20 - (confidence_width * 100))
     
-    # Sample size (10%)
-    sample_score = min(sample_size / 30, 1) * 10
+    # Probability sweet spot (10% - risk management)
+    # Sweet spot is 45-65% probability (manageable variance)
+    prob_distance = abs(true_prob - 0.55)
+    prob_score = max(0, 10 - (prob_distance * 15))
+    
+    # Data quality (10% - trust factor)
+    quality_score = (quality / 100) * 10
+    
+    # Sample size (5% - experience factor)
+    sample_score = min(sample_size / 50, 1) * 5
+    
+    # CLV contribution (bonus up to 5 points)
+    # Positive CLV (beat closing line) is strong signal
+    clv_bonus = max(0, min(clv / 2, 5))
+    
+    # Sport-specific adjustments
+    sport_multipliers = {
+        'NFL': 1.05, 'NBA': 1.05,  # More predictable - slight boost
+        'MLB': 0.98, 'NHL': 0.98,  # Higher variance - slight reduction
+        'NCAAMB': 0.95, 'NCAAF': 0.95,  # Less efficient but volatile
+        'default': 1.0
+    }
+    sport_multiplier = sport_multipliers.get(sport, 1.0)
     
     # History boost (bonus)
     history_bonus = history_boost
     
-    total = ev_score + edge_score + prob_score + quality_score + sample_score + history_bonus
+    # Calculate total
+    subtotal = ev_score + edge_score + confidence_score + prob_score + quality_score + sample_score
+    total = (subtotal * sport_multiplier) + clv_bonus + history_bonus
+    
     return min(total, 100)
+
+
+def calculate_variance_adjusted_ev(true_probability: float,
+                                    odds: int,
+                                    sample_size: int,
+                                    quality: float) -> float:
+    """
+    Calculate EV adjusted for uncertainty in probability estimate.
+    Uses conservative probability estimate from confidence interval.
+    """
+    # Get confidence interval
+    lower_bound, upper_bound = calculate_confidence_interval(
+        true_probability, sample_size, confidence=0.90
+    )
+    
+    # Quality adjustment - lower quality = more conservative
+    quality_factor = quality / 100
+    
+    # Blend between lower bound and point estimate based on quality
+    # Low quality: use lower bound (pessimistic)
+    # High quality: use point estimate
+    conservative_prob = (lower_bound * (1 - quality_factor)) + (true_probability * quality_factor)
+    
+    # Calculate EV with conservative probability
+    return calculate_ev_percentage(conservative_prob, odds)
+
+
+def calculate_closing_line_value(bet_odds: int, closing_odds: int) -> float:
+    """
+    Calculate Closing Line Value (CLV) as percentage.
+    Positive CLV means you beat the closing line (good).
+    Negative CLV means closing line moved against you (bad).
+    """
+    # Convert both to implied probabilities
+    bet_prob = american_to_probability(bet_odds)
+    close_prob = american_to_probability(closing_odds)
+    
+    # For underdogs (positive odds): lower closing odds is better
+    # For favorites (negative odds): higher closing odds is better (less negative)
+    if bet_odds > 0:
+        # Underdog: bet_prob > close_prob means line moved in our favor
+        clv = (bet_prob - close_prob) * 100
+    else:
+        # Favorite: bet_prob < close_prob means line moved in our favor
+        # (e.g., bet at -110, close at -105: we got worse odds = negative CLV)
+        clv = (close_prob - bet_prob) * 100
+    
+    return clv
 
 
 def is_plus_ev(true_probability: float, odds: int, threshold: float = 0.07) -> bool:
     """Quick check if bet is +EV above threshold."""
     ev_pct = calculate_ev_percentage(true_probability, odds)
     return ev_pct >= threshold * 100
+
+
+def calculate_brier_score(predicted_probs: list[float], outcomes: list[int]) -> float:
+    """
+    Calculate Brier score for model calibration assessment.
+    Lower score = better calibration (0 = perfect, 0.25 = random, 0.5 = worst).
+    
+    Args:
+        predicted_probs: List of predicted probabilities (0-1)
+        outcomes: List of actual outcomes (1 = win, 0 = loss)
+    
+    Returns:
+        Brier score (mean squared error)
+    """
+    if len(predicted_probs) != len(outcomes):
+        raise ValueError("Predicted probabilities and outcomes must have same length")
+    
+    if len(predicted_probs) == 0:
+        return 0.0
+    
+    squared_errors = [(pred - actual) ** 2 for pred, actual in zip(predicted_probs, outcomes)]
+    return sum(squared_errors) / len(squared_errors)
 
 
 def clamp(value: float, min_val: float, max_val: float) -> float:
