@@ -82,7 +82,7 @@ class SportsBettingModel:
         "min_true_probability_pct": 40.0,  # Minimum 40% win probability
         "min_quality": 60.0,            # Minimum data quality
         "min_sample_size": 15,          # Minimum sample size
-        "min_edge_score": 70,           # Minimum composite score
+        "min_edge_score": 65,           # Minimum composite score
         
         "kelly_fraction": 0.20,         # 20% fractional Kelly
         "max_stake_pct": 0.035,         # 3.5% max per bet
