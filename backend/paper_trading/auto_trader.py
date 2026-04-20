@@ -6,7 +6,7 @@ Automatically creates paper bets from model picks and tracks performance
 from datetime import datetime, date
 from typing import List, Dict, Optional, Any
 from dataclasses import dataclass
-from .models import PaperBet, PaperBankroll, AutoTradingSettings, Session
+from .models import PaperBet, PaperBankroll, AutoTradingSettings, get_session
 
 @dataclass
 class PaperTradingSettings:
@@ -24,34 +24,67 @@ class AutoTrader:
     """
     
     def __init__(self):
-        self.session = Session()
-        self._ensure_settings_exist()
+        self._session = None
+        self._db_available = False
+        try:
+            self._session = get_session()
+            if self._session is not None:
+                self._db_available = True
+                self._ensure_settings_exist()
+            else:
+                print("⚠️ Paper trading database not available - paper trading disabled")
+        except Exception as e:
+            print(f"⚠️ Paper trading initialization failed: {e}")
+    
+    @property
+    def session(self):
+        """Get database session, reinitialize if needed"""
+        if self._session is None and not self._db_available:
+            try:
+                self._session = get_session()
+                if self._session is not None:
+                    self._db_available = True
+            except Exception as e:
+                print(f"Could not get session: {e}")
+        return self._session
     
     def _ensure_settings_exist(self):
         """Ensure default settings exist in database"""
-        settings = self.session.query(AutoTradingSettings).first()
-        if not settings:
-            settings = AutoTradingSettings()
-            self.session.add(settings)
-            self.session.commit()
-            print("✅ Created default paper trading settings")
+        try:
+            settings = self.session.query(AutoTradingSettings).first()
+            if not settings:
+                settings = AutoTradingSettings()
+                self.session.add(settings)
+                self.session.commit()
+                print("✅ Created default paper trading settings")
+        except Exception as e:
+            print(f"Could not ensure settings exist: {e}")
     
     def get_settings(self) -> PaperTradingSettings:
         """Get current paper trading settings"""
-        settings = self.session.query(AutoTradingSettings).first()
-        if not settings:
+        try:
+            if self.session is None:
+                return PaperTradingSettings()  # Return defaults if DB unavailable
+            settings = self.session.query(AutoTradingSettings).first()
+            if not settings:
+                return PaperTradingSettings()
+            
+            return PaperTradingSettings(
+                enabled=settings.enabled,
+                starting_bankroll=settings.starting_bankroll,
+                kelly_fraction=settings.kelly_fraction,
+                min_ev=settings.min_ev,
+                max_daily_bets=settings.max_daily_bets
+            )
+        except Exception as e:
+            print(f"Could not get settings: {e}")
             return PaperTradingSettings()
-        
-        return PaperTradingSettings(
-            enabled=settings.enabled,
-            starting_bankroll=settings.starting_bankroll,
-            kelly_fraction=settings.kelly_fraction,
-            min_ev=settings.min_ev,
-            max_daily_bets=settings.max_daily_bets
-        )
     
     def update_settings(self, **kwargs) -> bool:
         """Update paper trading settings"""
+        if self.session is None:
+            print("⚠️ Cannot update settings - database not available")
+            return False
         try:
             settings = self.session.query(AutoTradingSettings).first()
             if not settings:
@@ -67,7 +100,8 @@ class AutoTrader:
             return True
         except Exception as e:
             print(f"Error updating settings: {e}")
-            self.session.rollback()
+            if self.session:
+                self.session.rollback()
             return False
     
     def enable_auto_trading(self) -> bool:
@@ -80,6 +114,9 @@ class AutoTrader:
     
     def reset_paper_trading(self, new_bankroll: float = 10000.0) -> bool:
         """Reset paper trading - clear all bets and reset bankroll"""
+        if self.session is None:
+            print("⚠️ Cannot reset - database not available")
+            return False
         try:
             # Clear all bets
             self.session.query(PaperBet).delete()
@@ -98,21 +135,30 @@ class AutoTrader:
             return True
         except Exception as e:
             print(f"Error resetting paper trading: {e}")
-            self.session.rollback()
+            if self.session:
+                self.session.rollback()
             return False
     
     def get_current_bankroll(self) -> float:
         """Get current paper trading bankroll"""
-        settings = self.session.query(AutoTradingSettings).first()
-        if settings:
-            return settings.current_bankroll
-        return 10000.0
+        try:
+            if self.session is None:
+                return 10000.0
+            settings = self.session.query(AutoTradingSettings).first()
+            if settings:
+                return settings.current_bankroll
+            return 10000.0
+        except Exception:
+            return 10000.0
     
     def create_paper_bet(self, pick_data: Dict[str, Any]) -> Optional[PaperBet]:
         """
         Create a paper bet from a pick.
         Called automatically when picks are generated.
         """
+        if self.session is None:
+            return None  # Database not available
+            
         settings = self.get_settings()
         
         if not settings.enabled:
@@ -179,17 +225,26 @@ class AutoTrader:
             profit=0.0
         )
         
-        self.session.add(paper_bet)
-        self.session.commit()
-        
-        print(f"📝 Paper bet created: {paper_bet.selection} ${stake:.2f} @ {odds}")
-        return paper_bet
+        try:
+            self.session.add(paper_bet)
+            self.session.commit()
+            
+            print(f"📝 Paper bet created: {paper_bet.selection} ${stake:.2f} @ {odds}")
+            return paper_bet
+        except Exception as e:
+            print(f"Error creating paper bet: {e}")
+            if self.session:
+                self.session.rollback()
+            return None
     
     def settle_bet(self, bet_id: str, result: str, actual_odds: Optional[int] = None) -> bool:
         """
         Settle a paper bet with result.
         result: 'win', 'loss', 'push'
         """
+        if self.session is None:
+            print("⚠️ Cannot settle bet - database not available")
+            return False
         try:
             bet = self.session.query(PaperBet).filter_by(bet_id=bet_id).first()
             if not bet:
@@ -233,19 +288,26 @@ class AutoTrader:
             return True
         except Exception as e:
             print(f"Error settling bet: {e}")
-            self.session.rollback()
+            if self.session:
+                self.session.rollback()
             return False
     
     def get_all_bets(self, limit: int = 100) -> List[PaperBet]:
         """Get all paper bets ordered by date desc"""
+        if self.session is None:
+            return []
         return self.session.query(PaperBet).order_by(PaperBet.created_at.desc()).limit(limit).all()
     
     def get_pending_bets(self) -> List[PaperBet]:
         """Get all pending paper bets"""
+        if self.session is None:
+            return []
         return self.session.query(PaperBet).filter_by(result='pending').all()
     
     def get_settled_bets(self, days: int = 30) -> List[PaperBet]:
         """Get settled bets from last N days"""
+        if self.session is None:
+            return []
         from datetime import timedelta
         cutoff = datetime.utcnow() - timedelta(days=days)
         return self.session.query(PaperBet).filter(
@@ -255,6 +317,12 @@ class AutoTrader:
     
     def get_performance_summary(self) -> Dict[str, Any]:
         """Get comprehensive performance summary"""
+        if self.session is None:
+            return {
+                'total_bets': 0, 'wins': 0, 'losses': 0, 'pushes': 0,
+                'win_rate': 0.0, 'total_staked': 0.0, 'total_profit': 0.0,
+                'roi': 0.0, 'current_bankroll': 10000.0, 'starting_bankroll': 10000.0
+            }
         bets = self.session.query(PaperBet).all()
         
         if not bets:
@@ -303,6 +371,8 @@ class AutoTrader:
     
     def get_daily_performance(self, days: int = 7) -> List[Dict[str, Any]]:
         """Get daily performance for last N days"""
+        if self.session is None:
+            return []
         from sqlalchemy import func
         from datetime import timedelta
         

@@ -77,20 +77,41 @@ class AutoTradingSettings(Base):
         return f"<AutoTradingSettings enabled={self.enabled} bankroll=${self.current_bankroll:,.2f}>"
 
 
-# Database setup
+# Database setup - LAZY INITIALIZATION to prevent import errors
 def init_paper_trading_db(db_path=None):
     """Initialize paper trading database"""
     if db_path is None:
         db_path = Path(__file__).parent.parent.parent / "data" / "paper_trading.db"
     
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    engine = create_engine(f'sqlite:///{db_path}', echo=False)
-    Base.metadata.create_all(engine)
-    
-    return engine
+    try:
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        engine = create_engine(f'sqlite:///{db_path}', echo=False)
+        Base.metadata.create_all(engine)
+        
+        return engine
+    except Exception as e:
+        print(f"Warning: Could not initialize paper trading database: {e}")
+        return None
 
 
-# Create global engine
-engine = init_paper_trading_db()
-Session = sessionmaker(bind=engine)
+# Lazy initialization - don't create on import
+_engine = None
+_Session = None
+
+def get_engine():
+    """Get or create database engine (lazy initialization)"""
+    global _engine
+    if _engine is None:
+        _engine = init_paper_trading_db()
+    return _engine
+
+def get_session():
+    """Get database session"""
+    global _Session
+    if _Session is None:
+        engine = get_engine()
+        if engine is None:
+            return None
+        _Session = sessionmaker(bind=engine)
+    return _Session()

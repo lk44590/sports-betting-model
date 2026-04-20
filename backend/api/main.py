@@ -1134,12 +1134,12 @@ async def get_paper_bets(
 ):
     """Get all paper bets history."""
     try:
-        from paper_trading.models import PaperBet
+        # Get all bets first
+        bets = auto_trader.get_all_bets(limit)
         
+        # Filter by status if requested
         if status:
-            bets = auto_trader.session.query(PaperBet).filter_by(result=status).limit(limit).all()
-        else:
-            bets = auto_trader.get_all_bets(limit)
+            bets = [b for b in bets if b.result == status]
         
         return {
             "total_bets": len(bets),
