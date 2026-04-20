@@ -6,7 +6,7 @@ Uses team statistics to predict game outcomes and find value bets
 import math
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
-from ..data.team_stats import TeamStats, team_stats_manager
+from data.team_stats import TeamStats, team_stats_manager
 
 @dataclass
 class GamePrediction:
