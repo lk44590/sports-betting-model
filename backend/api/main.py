@@ -3,15 +3,21 @@ FastAPI application for the sports betting model.
 Provides endpoints for picks, performance tracking, and analytics.
 """
 
+# Load environment variables FIRST (before any module imports)
+from pathlib import Path
+import os
+from dotenv import load_dotenv
+env_path = Path(__file__).parent.parent.parent / ".env"
+if env_path.exists():
+    load_dotenv(env_path)
+
 from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
-from pathlib import Path
 from datetime import datetime, date
-import os
 
 # Import our modules
 import sys
