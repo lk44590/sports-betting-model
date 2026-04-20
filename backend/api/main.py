@@ -452,10 +452,13 @@ async def get_picks_debug(
                 "market_implied_prob": round(evaluated.market_implied_prob * 100, 1) if evaluated.market_implied_prob else None,
                 "true_probability": round(evaluated.true_probability * 100, 1) if evaluated.true_probability else None,
                 "ev_pct": round(evaluated.ev_pct, 2),
+                "buffered_ev_pct": round(evaluated.buffered_ev_pct, 2) if hasattr(evaluated, 'buffered_ev_pct') else None,
                 "edge_score": round(evaluated.edge_score, 1),
                 "composite_score": round(evaluated.composite_score, 1),
+                "data_quality": round(evaluated.data_quality, 1) if hasattr(evaluated, 'data_quality') else None,
+                "sample_size": evaluated.sample_size if hasattr(evaluated, 'sample_size') else None,
                 "qualified": evaluated.qualified,
-                "would_pass_filter": evaluated.ev_pct >= min_ev and evaluated.qualified
+                "notes": evaluated.notes if hasattr(evaluated, 'notes') else None
             })
         
         return {
